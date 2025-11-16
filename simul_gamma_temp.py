@@ -199,7 +199,7 @@ def Plot3DScattererMotion(savepath:str,p1:NDArray,p2:NDArray):
     # Create figure + axis with subplots
     fig,axs = plt.subplots(figsize=(12,9),subplot_kw={"projection":"3d"})
     fig.set_facecolor(fc)
-    ax:plt.Axes = axs[0]
+    ax:plt.Axes = axs
     ax.set_facecolor(fc)
 
     # Plot points
@@ -278,14 +278,14 @@ def SimulSampleCoherence(
         ylim:tuple,
         zlim:tuple,
         buffer:int,
-        norm_stats,
-        diel_stats,
-        height,
-        theta_inc,        
-        antenna_pattern_rad,
-        pol,
-        wl,
-        motion_stdd,
+        norm_kwargs:dict,
+        diel_kwargs:dict,
+        motion_stdd:tuple,
+        height:float,
+        theta_inc:float,        
+        antenna_pattern_rad:float,        
+        wl:float,     
+        pol:str,   
         savedir:str=None
     ):
     
@@ -299,7 +299,7 @@ def SimulSampleCoherence(
     # RUN CELL SIMULATION
     #------------------------------------------------------------------------------------#
     # PRIMARY
-    pos1,norm1,diel1 = scatts.GetScatterers(size,xlim,ylim,zlim,buffer,norm_stats,diel_stats)        
+    pos1,norm1,diel1 = scatts.GetScatterers(size,xlim,ylim,zlim,buffer,norm_kwargs,diel_kwargs)        
     scatts1 = RunForwardPropagation(sat,pos1,diel1,theta_inc,norm1,antenna_pattern_rad,pol,wl)
     
     m_buffer = ~GetSceneMask(pos1,xlim,ylim,zlim) # Determine scatterers inside scene (i.e. remove buffer)
@@ -327,7 +327,7 @@ def SimulSampleCoherence(
         PlotScattererDistribution(sp,signal1,n_bins=100)
     
         sp = path.join(savedir,'elemscatt_orientation.jpg')
-        PlotScattererOrientation(sp,norm1[0],norm_stats[0],theta_inc)
+        PlotScattererOrientation(sp,norm1[0],norm_kwargs['mean'],theta_inc)
 
         sp = path.join(savedir,'elemscatt_motion2d.jpg')
         Plot2DScattererMotion(sp,pos1[0],pos2[0],extent=(*xlim,*ylim),buffer=buffer)
@@ -373,8 +373,8 @@ def run():
     slope_stdd_rad = np.deg2rad(slope_stdd_deg)
     antenna_pattern_rad = np.deg2rad(antenna_pattern_deg)
 
-    norm_stats = (slope_mean_rad,slope_stdd_rad)
-    diel_stats = (eps_mean,eps_stdd)
+    norm_kwargs = {'distribution':'Gaussian','mean':slope_mean_rad,'stdd':slope_stdd_rad}  
+    diel_kwargs = {'distribution':'Gaussian','mean':eps_mean,'stdd':eps_stdd}
 
     makedirs(savedir,exist_ok=True)
 
@@ -387,15 +387,13 @@ def run():
     for wl in [0.031,0.055,0.24,0.69]:
         opid = f'WL={wl:.3f} [m]'
         coh_wl = []
-        for i,motion_stdd in enumerate(x):
+        for i,_ in enumerate(x):
             print(f'{opid}: {i+1}/{num_steps}',end='\r')
             coh = SimulSampleCoherence(
-                num_looks,num_scatts,
-                xlim,ylim,zlim,buffer,
-                norm_stats,diel_stats,
-                sat_height,theta_inc_rad,
-                antenna_pattern_rad,pol,wl,
-                (motion_stdd,0.0,0.0),None)
+                num_looks,num_scatts,xlim,ylim,zlim,buffer,
+                norm_kwargs,diel_kwargs,motion_stdd, # (motion_stdd,0.0,0.0)
+                sat_height,theta_inc_rad,antenna_pattern_rad,
+                wl,pol,None)
             
             coh_wl.append(coh)
 

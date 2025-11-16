@@ -9,19 +9,19 @@ def GetScatterers(
         ylim:tuple,
         zlim:tuple,
         buffer:int,
-        norm_stats:tuple[float,float],
-        diel_stats:tuple[float,float]
+        norm_kwargs:dict,
+        diel_kwargs:dict
     )->tuple[NDArray,NDArray]:
         
     # POSITION VECTOR
     pos = SamplePosition(size,xlim,ylim,zlim,buffer)
     
     # ORIENTATION VECTOR
-    norm = SampleOrientations(size,distribution='Gaussian',mean=norm_stats[0],stdd=norm_stats[1])
+    norm = SampleOrientations(size,**norm_kwargs)
 
     # DIELECTRIC VECTOR   
     # samples the dielectric constanst from a Gaussian distribution 
-    eps = SampleDielectricConstants(size,distribution='Gaussian',mean=diel_stats[0],stdd=diel_stats[1])
+    eps = SampleDielectricConstants(size,**diel_kwargs)
 
     return pos,norm,eps
 
