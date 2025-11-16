@@ -1,41 +1,78 @@
 import numpy as np
 from numpy.typing import NDArray
 
-def GetScatterers(
-        num_looks:int,
-        num_scatts:int,
-        scene_shape:tuple[int,int],
-        scene_buffer:int,
-        slope_mean:float, 
-        slope_stdd:float,
-        eps_mean:complex,
-        eps_stdd:complex
-    )->tuple[NDArray,NDArray]:
+pi2 = (np.pi / 2)
 
-    h2 = (scene_shape[0] // 2) + scene_buffer
-    w2 = (scene_shape[1] // 2) + scene_buffer
-    shape = (num_looks,num_scatts)
-    
+def GetScatterers(
+        size:tuple,
+        xlim:tuple,
+        ylim:tuple,
+        zlim:tuple,
+        buffer:int,
+        norm_stats:tuple[float,float],
+        diel_stats:tuple[float,float]
+    )->tuple[NDArray,NDArray]:
+        
     # POSITION VECTOR
-    # uniformely and indipendently samples the scene
-    #
-    # TODO:
-    # - add support for 2D/3D case
-    # - add support for predifined distribution
-    # - add support for custom distribution 
-    pos = np.stack([
-        np.random.uniform(-h2,h2,size=shape), 
-        np.random.uniform(-w2,w2,size=shape),
-        np.zeros(shape,dtype=np.float64)],    
-        axis=2)
+    pos = SamplePosition(size,xlim,ylim,zlim,buffer)
     
     # ORIENTATION VECTOR
-    theta_norm = np.random.normal(slope_mean,slope_stdd,shape)
+    norm = SampleOrientations(size,distribution='Gaussian',mean=norm_stats[0],stdd=norm_stats[1])
 
     # DIELECTRIC VECTOR   
     # samples the dielectric constanst from a Gaussian distribution 
-    eps_real = np.random.normal(eps_mean.real,eps_stdd.real,shape)
-    eps_imag = np.random.normal(eps_mean.imag,eps_stdd.imag,shape)
-    eps = eps_real + 1j * eps_imag
+    eps = SampleDielectricConstants(size,distribution='Gaussian',mean=diel_stats[0],stdd=diel_stats[1])
 
-    return pos,theta_norm,eps
+    return pos,norm,eps
+
+
+def SamplePosition(size:tuple,xlim:tuple,ylim:tuple,zlim:tuple=(0.0,0.0),buffer:int=0):    
+    assert buffer >= 0
+    
+    dims = []
+    for dlim in [xlim,ylim,zlim]:
+        if (dlim[0] > dlim[1]) or (buffer > 0):
+            dpos = np.random.uniform(dlim[0]-buffer,dlim[1]+buffer,size=size)
+        else:
+            dpos = np.zeros(size,dtype=np.float64)
+
+        dims.append(dpos)
+    
+    return np.stack(dims,axis=2)
+
+def SampleOrientations(shape:tuple,distribution:str,**kwargs)->NDArray:    
+    # NOTE: expresses the angle between the surface normal and the nadir in [rads]
+    key:str = distribution.lower()
+
+    if key == 'constant':
+        value:float = kwargs.get('value',0.0)
+        norm = np.full(shape,value,dtype=np.float64)
+    elif key in ('gaussian','normal'):
+        norm_mean:float = kwargs.get('mean',0.0)
+        norm_stdd:float = kwargs.get('stdd',0.0)
+        norm = np.random.normal(norm_mean,norm_stdd,shape)
+
+    else:
+        raise NotImplementedError(f'Unsupported distribution type "{distribution}".')
+
+    # wrap around to preserve physical sense
+    norm[norm > +pi2] -= np.pi
+    norm[norm < -pi2] += np.pi
+
+    return norm
+
+def SampleDielectricConstants(shape:tuple,distribution:str,**kwargs)->NDArray:
+    key:str = distribution.lower()
+
+    if key == 'constant':
+        eps = np.ones(shape,dtype=np.complex64)
+    elif key in ('gaussian','normal'):
+        diel_mean:complex = kwargs.get('mean',1.0)
+        diel_stdd:complex = kwargs.get('stdd',0.0)
+        eps_real = np.random.normal(diel_mean.real,diel_stdd.real,shape)
+        eps_imag = np.random.normal(diel_mean.imag,diel_stdd.imag,shape)
+        eps = eps_real + 1j * eps_imag
+    else:
+        raise NotImplementedError(f'Unsupported distribution type "{distribution}".')
+
+    return eps
