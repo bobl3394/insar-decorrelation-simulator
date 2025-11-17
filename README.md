@@ -6,11 +6,14 @@ Computes the complex reflection coefficient using the Fresnel equations.
 <img src="docs/distribution.jpg" width="400">
 
 ## Temporal Decorrelation
-Simulates temporal change as a Gaussian-distributed random shift in position.
-The simulated coherence values are compared against the temporal decorrelation model of `Zebker and Villasenor (1992)`.
+Simulates temporal changes with the following assumptions: 
+- motion is modelled as a random shift in position with a zero-mean Gaussian distribution;
+- the dielectric properties are assumed to remain constant over time
+
 
 <img src="docs/elemscatts.jpg" width="400">
 
+The simulated coherence values are compared against the temporal decorrelation model of `Zebker and Villasenor (1992)`.
 <img src="docs/gtemp.jpg" width="400">
 
 

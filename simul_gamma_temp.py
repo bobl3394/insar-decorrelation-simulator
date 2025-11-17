@@ -61,7 +61,7 @@ def PlotGammaTempVsMotion(savepath:str,x:NDArray,lut_coh:dict[str,NDArray],theta
     ax.set_facecolor((.9,.9,.9))
     for wl,ll in lut_coh.items():
         y_simul = np.abs(np.array(ll))
-        y_theory = models.TemporalDecorrelation(wl,theta_inc,ymotion=x,zmotion=0.0)
+        y_theory = models.TemporalDecorrelation(wl,theta_inc,xmotion=x,zmotion=0.0)
 
         label = rf'$\lambda={wl:.3f}$ [$m$]'
 
@@ -135,7 +135,7 @@ def PlotScattererDistribution(savepath:str,data:NDArray,*,n_bins:int=100):
 
     return
 
-def Plot2DScattererMotion(savepath:str,p1:NDArray,p2:NDArray,*,extent:tuple=None,buffer:int=0):
+def Plot2DScattererMotion(savepath:str,p1:NDArray,p2:NDArray,*,extent:tuple=None):
     SetRC(legendFontSize=18)
 
     d = p2 - p1
@@ -150,15 +150,7 @@ def Plot2DScattererMotion(savepath:str,p1:NDArray,p2:NDArray,*,extent:tuple=None
         height = (ymax - ymin)
 
         square = patches.Rectangle((xmin,ymin),width,height,fill=False,edgecolor='red',linewidth=2)
-        ax.add_patch(square)
-
-        if buffer > 0:
-            height += (2 * buffer)
-            width  += (2 * buffer)
-            xmin -= buffer
-            ymin -= buffer
-            square = patches.Rectangle((xmin,ymin),width,height,fill=False,edgecolor='red',linewidth=2,linestyle=':')
-            ax.add_patch(square)        
+        ax.add_patch(square)     
 
     # Plot points
     ax.scatter(p1[:,0],p1[:,1],label='Before',color='blue')
@@ -232,7 +224,7 @@ def Plot3DScattererMotion(savepath:str,p1:NDArray,p2:NDArray):
 
 def GetSatellite(height,inc):
     d = height * np.tan(inc)
-    return np.array([[-d,0,height]])
+    return np.array([[-d,0.0,height]])
 
 def RunForwardPropagation(sat,pos,eps,theta_inc,theta_norm,antenna_pattern,pol,wl):
     lia = (theta_inc - theta_norm)
@@ -255,13 +247,9 @@ def GetSceneMask(pos:NDArray,xlim:tuple,ylim:tuple,zlim:tuple)->NDArray:
 
     return m_scene
 
-def ApplyRandomGaussianShifts(pos:NDArray,xmotion:float=0.0,ymotion:float=0.0,zmotion:float=0.0)->NDArray:    
-    _,num_scatts,_ = pos.shape
-
-    pos_shift = pos.copy()
-    if xmotion: pos_shift[...,0] += np.random.normal(0.0,xmotion,num_scatts)
-    if ymotion: pos_shift[...,1] += np.random.normal(0.0,ymotion,num_scatts)
-    if zmotion: pos_shift[...,2] += np.random.normal(0.0,zmotion,num_scatts)
+def ApplyRandomGaussianShifts(pos:NDArray,motion_kwargs)->NDArray:    
+    looks,count,_ = pos.shape
+    pos_shift = pos + scatts.SamplePosition((looks,count),**motion_kwargs)
 
     return pos_shift
 
@@ -271,36 +259,37 @@ def ComputeSampleCoherence(pri:NDArray,sec:NDArray)->NDArray:
 
     return num / den
 
-def SimulSampleCoherence(
-        num_looks:int,
-        num_scatts:int,
-        xlim:tuple,
-        ylim:tuple,
-        zlim:tuple,
-        buffer:int,
-        norm_kwargs:dict,
-        diel_kwargs:dict,
-        motion_stdd:tuple,
-        height:float,
-        theta_inc:float,        
-        antenna_pattern_rad:float,        
-        wl:float,     
-        pol:str,   
-        savedir:str=None
-    ):
+def SimulSampleCoherence(config:dict,savedir:str=None):
+    # CONFIGURATION ALIASES
+    # Satellite
+    wl = config['satellite']['wavelength']
+    look_angle = config['satellite']['look_angle']
+    antenna_aperture = config['satellite']['antenna_aperture']
+    pol = config['satellite']['polarization']
     
-    size = (num_looks,num_scatts)
+    # Scene
+    looks = config['scene']['looks']
+    xlim = config['scene']['xlim']
+    ylim = config['scene']['ylim']
+    zlim = config['scene']['zlim']
+
+    # Elements
+    count = config['elements']['count']    
+    norm_mean = config['elements']['normal']['mean']
+
+    size = (looks,count)
 
     #====================================================================================#
     # COMPUTE SATELLITE POSITION
-    sat = GetSatellite(height,theta_inc)
+    sat = GetSatellite(config['satellite']['height'],look_angle)
 
     #====================================================================================#
     # RUN CELL SIMULATION
     #------------------------------------------------------------------------------------#
     # PRIMARY
-    pos1,norm1,diel1 = scatts.GetScatterers(size,xlim,ylim,zlim,buffer,norm_kwargs,diel_kwargs)        
-    scatts1 = RunForwardPropagation(sat,pos1,diel1,theta_inc,norm1,antenna_pattern_rad,pol,wl)
+    pos1,norm1,diel1 = scatts.GetScatterers(
+        size,config['elements']['position'],config['elements']['normal'],config['elements']['dielectric'])        
+    scatts1 = RunForwardPropagation(sat,pos1,diel1,look_angle,norm1,antenna_aperture,pol,wl)
     
     m_buffer = ~GetSceneMask(pos1,xlim,ylim,zlim) # Determine scatterers inside scene (i.e. remove buffer)
     # scatts1[m_buffer] = np.nan        
@@ -308,8 +297,8 @@ def SimulSampleCoherence(
 
     #------------------------------------------------------------------------------------#
     # SECONDARY
-    pos2 = ApplyRandomGaussianShifts(pos1,*motion_stdd)
-    scatts2 = RunForwardPropagation(sat,pos2,diel1,theta_inc,norm1,antenna_pattern_rad,pol,wl)
+    pos2 = ApplyRandomGaussianShifts(pos1,config['elements']['motion'])
+    scatts2 = RunForwardPropagation(sat,pos2,diel1,look_angle,norm1,antenna_aperture,pol,wl)
 
     m_buffer = ~GetSceneMask(pos2,xlim,ylim,zlim) # Determine scatterers inside scene (i.e. remove buffer)        
     # scatts2[m_buffer] = np.nan        
@@ -327,10 +316,10 @@ def SimulSampleCoherence(
         PlotScattererDistribution(sp,signal1,n_bins=100)
     
         sp = path.join(savedir,'elemscatt_orientation.jpg')
-        PlotScattererOrientation(sp,norm1[0],norm_kwargs['mean'],theta_inc)
+        PlotScattererOrientation(sp,norm1[0],norm_mean,look_angle)
 
         sp = path.join(savedir,'elemscatt_motion2d.jpg')
-        Plot2DScattererMotion(sp,pos1[0],pos2[0],extent=(*xlim,*ylim),buffer=buffer)
+        Plot2DScattererMotion(sp,pos1[0],pos2[0],extent=(*xlim,*ylim))
 
         sp = path.join(savedir,'elemscatt_motion3d.jpg')
         Plot3DScattererMotion(sp,pos1[0],pos2[0])
@@ -339,42 +328,42 @@ def SimulSampleCoherence(
 
 
 def run():
+    print('<TEMPORAL DECORRELATION SIMULATION>')
+
     #================================================================#
     # SETTINGS
-    # Plots
     savedir:str = 'plots'
+    makedirs(savedir,exist_ok=True)
 
-    # Satellite
-    sat_height = 10E3 # [m]
-    theta_inc_deg = 45 # [deg]
-    antenna_pattern_deg = 5
-    wl = 0.031
-
-    # Scene
-    xlim = [-10,10]
-    ylim = [-10,10]
-    zlim = [0,20]
-    buffer = 2 # [m]
-    slope_mean_deg = 0 # [deg]
-    slope_stdd_deg = 45 # [deg]
-
-    # Scatterers
-    num_scatts = 100
-    num_looks = 1000
-    eps_mean = 3.00 + 1j * 0.10
-    eps_stdd = 0.10 + 1j * 0.01    
-    motion_stdd = (1.0,1.0,1.0)
-    pol = 's' # {s,p} --> {}
-
-    #================================================================#
-    # CONVERT DEG2RAD
-    theta_inc_rad = np.deg2rad(theta_inc_deg)
-    slope_mean_rad = np.deg2rad(slope_mean_deg)
-    slope_stdd_rad = np.deg2rad(slope_stdd_deg)
-    antenna_pattern_rad = np.deg2rad(antenna_pattern_deg)
-
-    norm_kwargs = {'distribution':'Gaussian','mean':slope_mean_rad,'stdd':slope_stdd_rad}  
-    diel_kwargs = {'distribution':'Gaussian','mean':eps_mean,'stdd':eps_stdd}
+    config:dict = {
+        'satellite': {
+            'height': 10E3,                     # the antenna trajectory height in [m]
+            'look_angle': np.deg2rad(45),       # the antenna look-angle in [rad]
+            'antenna_aperture': np.deg2rad(5),  # the aperture angle of the antenna in [rad]
+            'wavelength': 0.031,                # the carrier wavelenght in [m]
+            'polarization': 's'                 # the wave polarization among {s,p}
+        },
+        'scene': {
+            'xlim': [-10,10],                   # the across-track dimensions in [m]
+            'ylim': [-10,10],                   # the along-track dimensions in [m]
+            'zlim': [  0,20],                   # the elevation dimensions in [m]
+            'looks': 1000                       # the number of simulated looks
+        },
+        'elements': {
+            'count': 100,                       # the number of elementary scatters in the scene
+            'position': {    
+                'x': {'name':'uniform', 'interval':[-10,10]},  
+                'y': {'name':'uniform', 'interval':[-10,10]},
+                'z': {'name':'uniform', 'interval':[  0,20]}
+            },
+            'motion': {    
+                'x': {'name':'Gaussian', 'mean':0.0, 'stdd':1.0},  
+                'y': {'name':'Gaussian', 'mean':0.0, 'stdd':1.0},  
+                'z': {'name':'Gaussian', 'mean':0.0, 'stdd':1.0}},
+            'normal': {'name': 'Gaussian', 'mean':np.deg2rad(0), 'stdd':np.deg2rad(45)},
+            'dielectric': {'name':'Gaussian', 'mean':(3.00 + 1j * 0.10), 'stdd':(0.10 + 1j * 0.01)}            
+        }
+    }
 
     makedirs(savedir,exist_ok=True)
 
@@ -386,26 +375,30 @@ def run():
     lut_coh = {}
     for wl in [0.031,0.055,0.24,0.69]:
         opid = f'WL={wl:.3f} [m]'
+        
+        config['satellite']['wavelength'] = wl
+        
         coh_wl = []
-        for i,_ in enumerate(x):
+        for i,stdd in enumerate(x):
             print(f'{opid}: {i+1}/{num_steps}',end='\r')
-            coh = SimulSampleCoherence(
-                num_looks,num_scatts,xlim,ylim,zlim,buffer,
-                norm_kwargs,diel_kwargs,motion_stdd, # (motion_stdd,0.0,0.0)
-                sat_height,theta_inc_rad,antenna_pattern_rad,
-                wl,pol,None)
-            
+
+            # config['elements']['motion']['x']['stdd'] = stdd
+            # config['elements']['motion']['y']['stdd'] = 0.0
+            # config['elements']['motion']['z']['stdd'] = 0.0
+
+            coh = SimulSampleCoherence(config,savedir)            
             coh_wl.append(coh)
 
         lut_coh[wl] = coh_wl
 
         print(f'{opid}: COMPLETED.')
-
     
     sp = path.join(savedir,'gamma_temp_simul_vs_model.jpg')
-    PlotGammaTempVsMotion(sp,x,lut_coh,theta_inc_rad)
+    PlotGammaTempVsMotion(sp,x,lut_coh,config['satellite']['look_angle'])
 
-    return
+    print('<END>')
+
+
 
 if __name__ == '__main__':
     run()
