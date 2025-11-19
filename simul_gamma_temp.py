@@ -6,7 +6,7 @@ import numpy as np
 from numpy.typing import NDArray
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
-from src import fresnel,scatts,models
+from src import satellite,scatterer,simul,models
 from src.plotting import SetRC
 from os import path,makedirs
 
@@ -90,7 +90,6 @@ def PlotGammaTempVsMotion(savepath:str,x:NDArray,lut_coh:dict[str,NDArray],theta
 
     return
 
-
 def PlotScattererDistribution(savepath:str,data:NDArray,*,n_bins:int=100):
     SetRC()
     
@@ -135,7 +134,7 @@ def PlotScattererDistribution(savepath:str,data:NDArray,*,n_bins:int=100):
 
     return
 
-def Plot2DScattererMotion(savepath:str,p1:NDArray,p2:NDArray,*,extent:tuple=None):
+def Plot2DScattererMotion(savepath:str,p1:NDArray,p2:NDArray,*,config:dict=None):
     SetRC(legendFontSize=18)
 
     d = p2 - p1
@@ -144,9 +143,10 @@ def Plot2DScattererMotion(savepath:str,p1:NDArray,p2:NDArray,*,extent:tuple=None
     fig, ax = plt.subplots(figsize=(12,9))
     ax.set_facecolor((.9,.9,.9))
 
-    if extent is not None:
-        xmin,xmax,ymin,ymax = extent
-        width = (xmax - xmin)
+    if config is not None:
+        xmin,xmax = config['scene']['xlim']
+        ymin,ymax = config['scene']['ylim']
+        width  = (xmax - xmin)
         height = (ymax - ymin)
 
         square = patches.Rectangle((xmin,ymin),width,height,fill=False,edgecolor='red',linewidth=2)
@@ -221,25 +221,11 @@ def Plot3DScattererMotion(savepath:str,p1:NDArray,p2:NDArray):
 
     return
 
+def GetSceneMask(pos:NDArray,config:dict)->NDArray:
+    xlim = config['scene']['xlim']
+    ylim = config['scene']['ylim']
+    zlim = config['scene']['zlim']
 
-def GetSatellite(height,inc):
-    d = height * np.tan(inc)
-    return np.array([[-d,0.0,height]])
-
-def RunForwardPropagation(sat,pos,eps,theta_inc,theta_norm,antenna_pattern,pol,wl):
-    lia = (theta_inc - theta_norm)
-    lia[np.abs(lia) > antenna_pattern] = 0.0 # VERY BASIC ANTENNA PATTERN GAIN :D
-
-    t = fresnel.GetReflectionCoefficient(1.0,eps,lia,pol)
-
-    dist = np.linalg.norm(pos - sat,axis=-1)
-
-    prop_phase_delay = (4 * np.pi * dist) / wl
-    signals = t * np.exp(-1j * prop_phase_delay)
-
-    return signals
-
-def GetSceneMask(pos:NDArray,xlim:tuple,ylim:tuple,zlim:tuple)->NDArray:
     m_scene = (
         (pos[...,0] >= xlim[0]) & (pos[...,0] <= xlim[1]) &
         (pos[...,1] >= ylim[0]) & (pos[...,1] <= ylim[1]) &
@@ -249,7 +235,7 @@ def GetSceneMask(pos:NDArray,xlim:tuple,ylim:tuple,zlim:tuple)->NDArray:
 
 def ApplyRandomGaussianShifts(pos:NDArray,motion_kwargs)->NDArray:    
     looks,count,_ = pos.shape
-    pos_shift = pos + scatts.SamplePosition((looks,count),**motion_kwargs)
+    pos_shift = pos + scatterer.SamplePosition((looks,count),**motion_kwargs)
 
     return pos_shift
 
@@ -261,47 +247,35 @@ def ComputeSampleCoherence(pri:NDArray,sec:NDArray)->NDArray:
 
 def SimulSampleCoherence(config:dict,savedir:str=None):
     # CONFIGURATION ALIASES
-    # Satellite
     wl = config['satellite']['wavelength']
     look_angle = config['satellite']['look_angle']
     antenna_aperture = config['satellite']['antenna_aperture']
     pol = config['satellite']['polarization']
-    
-    # Scene
-    looks = config['scene']['looks']
-    xlim = config['scene']['xlim']
-    ylim = config['scene']['ylim']
-    zlim = config['scene']['zlim']
-
-    # Elements
-    count = config['elements']['count']    
-    norm_mean = config['elements']['normal']['mean']
-
-    size = (looks,count)
+    size = (config['scene']['looks'],config['elements']['count'])
 
     #====================================================================================#
     # COMPUTE SATELLITE POSITION
-    sat = GetSatellite(config['satellite']['height'],look_angle)
+    sat = satellite.GetPositionFromHeightAndLookAngle(config['satellite']['height'],look_angle)
 
     #====================================================================================#
-    # RUN CELL SIMULATION
+    # DEFINE CELL & RUN SIMULATION
     #------------------------------------------------------------------------------------#
     # PRIMARY
-    pos1,norm1,diel1 = scatts.GetScatterers(
+    pos1,norm1,diel1 = scatterer.GetScatterers(
         size,config['elements']['position'],config['elements']['normal'],config['elements']['dielectric'])        
-    scatts1 = RunForwardPropagation(sat,pos1,diel1,look_angle,norm1,antenna_aperture,pol,wl)
+    scatts1 = simul.RunForwardPropagation(sat,pos1,diel1,look_angle,norm1,antenna_aperture,pol,wl)
     
-    m_buffer = ~GetSceneMask(pos1,xlim,ylim,zlim) # Determine scatterers inside scene (i.e. remove buffer)
-    # scatts1[m_buffer] = np.nan        
+    m_buffer = ~GetSceneMask(pos1,config) # Determine scatterers inside scene (i.e. remove buffer)
+    scatts1[m_buffer] = np.nan        
     signal1 = np.nansum(scatts1,axis=-1)
 
     #------------------------------------------------------------------------------------#
     # SECONDARY
     pos2 = ApplyRandomGaussianShifts(pos1,config['elements']['motion'])
-    scatts2 = RunForwardPropagation(sat,pos2,diel1,look_angle,norm1,antenna_aperture,pol,wl)
+    scatts2 = simul.RunForwardPropagation(sat,pos2,diel1,look_angle,norm1,antenna_aperture,pol,wl)
 
-    m_buffer = ~GetSceneMask(pos2,xlim,ylim,zlim) # Determine scatterers inside scene (i.e. remove buffer)        
-    # scatts2[m_buffer] = np.nan        
+    m_buffer = ~GetSceneMask(pos2,config) # Determine scatterers inside scene (i.e. remove buffer)        
+    scatts2[m_buffer] = np.nan        
     signal2 = np.nansum(scatts2,axis=-1)
 
     #====================================================================================#
@@ -316,10 +290,10 @@ def SimulSampleCoherence(config:dict,savedir:str=None):
         PlotScattererDistribution(sp,signal1,n_bins=100)
     
         sp = path.join(savedir,'elemscatt_orientation.jpg')
-        PlotScattererOrientation(sp,norm1[0],norm_mean,look_angle)
+        PlotScattererOrientation(sp,norm1[0],config['elements']['normal']['mean'],look_angle)
 
         sp = path.join(savedir,'elemscatt_motion2d.jpg')
-        Plot2DScattererMotion(sp,pos1[0],pos2[0],extent=(*xlim,*ylim))
+        Plot2DScattererMotion(sp,pos1[0],pos2[0],config=config)
 
         sp = path.join(savedir,'elemscatt_motion3d.jpg')
         Plot3DScattererMotion(sp,pos1[0],pos2[0])
@@ -352,9 +326,9 @@ def run():
         'elements': {
             'count': 100,                       # the number of elementary scatters in the scene
             'position': {    
-                'x': {'name':'uniform', 'interval':[-10,10]},  
-                'y': {'name':'uniform', 'interval':[-10,10]},
-                'z': {'name':'uniform', 'interval':[  0,20]}
+                'x': {'name':'uniform', 'interval':[-12,12]},  
+                'y': {'name':'uniform', 'interval':[-12,12]},
+                'z': {'name':'uniform', 'interval':[  0,22]}
             },
             'motion': {    
                 'x': {'name':'Gaussian', 'mean':0.0, 'stdd':1.0},  
